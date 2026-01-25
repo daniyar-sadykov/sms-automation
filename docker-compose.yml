@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  openphone-automation:
+    build: .
+    container_name: sms-automation
+    restart: unless-stopped
+    ports:
+      - "8000:3000"
+    environment:
+      - NODE_ENV=production
+    volumes:
+      - ./logs:/app/logs
+      - ./screenshots:/app/screenshots
+    env_file:
+      - .env
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
