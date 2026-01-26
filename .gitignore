@@ -43,3 +43,13 @@ monkey.png
 test-image.png
 *.png
 !src/**/*.png
+
+# Documentation (not needed for service to work)
+*.md
+ARCHITECTURE.md
+DEPLOYMENT.md
+N8N_INTEGRATION.md
+README.md
+
+# Utility scripts (optional, not needed for service)
+*.bat
