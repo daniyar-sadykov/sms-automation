@@ -387,9 +387,12 @@ export class OpenPhoneService {
   }
 
   /**
-   * Send SMS message
+   * Send SMS/MMS message
+   * @param phone - Phone number to send to
+   * @param text - Message text
+   * @param mediaFilePaths - Optional array of local file paths for MMS attachments
    */
-  async sendMessage(phone: string, text: string): Promise<MessageResult> {
+  async sendMessage(phone: string, text: string, mediaFilePaths?: string[]): Promise<MessageResult> {
     if (!this.page) {
       throw new Error('Browser not initialized. Call initialize() first.');
     }
@@ -413,11 +416,17 @@ export class OpenPhoneService {
       await this.enterMessageText(text);
       await sleep(randomActionPause());
 
-      // Step 4: Click send button (will capture before/after screenshots)
+      // Step 4: Attach media files if provided (MMS)
+      if (mediaFilePaths && mediaFilePaths.length > 0) {
+        await this.attachMediaFiles(mediaFilePaths);
+        await sleep(randomActionPause());
+      }
+
+      // Step 5: Click send button (will capture before/after screenshots)
       await this.clickSendButton();
       await sleep(randomActionPause());
 
-      // Step 5: Verify message was sent
+      // Step 6: Verify message was sent
       const success = await this.verifyMessageSent();
       const durationMs = Date.now() - startTime;
 
@@ -583,6 +592,178 @@ export class OpenPhoneService {
       logger.error('Failed to enter message text:', error);
       throw error;
     }
+  }
+
+  /**
+   * Attach media files to message (for MMS)
+   */
+  private async attachMediaFiles(filePaths: string[]): Promise<void> {
+    if (!this.page) throw new Error('Page not initialized');
+
+    try {
+      logger.info(`Attaching ${filePaths.length} media file(s)...`);
+
+      // Look for attachment button or file input
+      // OpenPhone typically has an attachment button that triggers a file input
+      const attachButtonSelectors = [
+        'button[aria-label="Attach"]',
+        'button[aria-label="Attachment"]',
+        'button[aria-label="Add attachment"]',
+        '[data-testid="attachment-button"]',
+        '[data-testid="attach-button"]',
+        'button svg[data-testid="AttachmentIcon"]',
+        'button:has(svg[class*="attachment"])',
+        // Иконка скрепки или плюса
+        'button:has(svg path[d*="M16.5"])',
+        'button._1rh31vu1', // OpenPhone specific class
+      ];
+
+      let attachButton: ElementHandle | null = null;
+      for (const selector of attachButtonSelectors) {
+        try {
+          attachButton = await this.page.$(selector);
+          if (attachButton && (await attachButton.isVisible())) {
+            logger.info(`✅ Found attachment button: ${selector}`);
+            break;
+          }
+        } catch (e) {
+          continue;
+        }
+      }
+
+      // Method 1: Try clicking attachment button to reveal file input
+      if (attachButton) {
+        await attachButton.click();
+        logger.info('Clicked attachment button');
+        await sleep(1000);
+      }
+
+      // Method 2: Look for file input (visible or hidden)
+      const fileInputSelectors = [
+        'input[type="file"]',
+        'input[accept*="image"]',
+        'input[accept*="video"]',
+        'input[accept*="pdf"]',
+      ];
+
+      let fileInput: ElementHandle | null = null;
+      for (const selector of fileInputSelectors) {
+        try {
+          fileInput = await this.page.$(selector);
+          if (fileInput) {
+            logger.info(`✅ Found file input: ${selector}`);
+            break;
+          }
+        } catch (e) {
+          continue;
+        }
+      }
+
+      if (fileInput) {
+        // Use Playwright's setInputFiles to upload files
+        await (fileInput as any).setInputFiles(filePaths);
+        logger.info(`✅ Attached ${filePaths.length} file(s) via file input`);
+        await sleep(2000); // Wait for files to be processed
+        
+        // Take screenshot after attachment
+        const attachScreenshot = path.join(
+          this.screenshotsDir,
+          `after-attach-${Date.now()}.png`
+        );
+        await this.page.screenshot({ path: attachScreenshot, fullPage: true });
+        logger.info(`📸 Screenshot after attachment: ${attachScreenshot}`);
+        this.currentScreenshots.push(attachScreenshot);
+      } else {
+        // Method 3: Try drag and drop as fallback
+        logger.warn('⚠️ File input not found, trying drag-and-drop fallback...');
+        
+        // Find the message area for drag-and-drop
+        const dropZoneSelectors = [
+          '[aria-label="message input"]',
+          'div[contenteditable="true"]',
+          '.message-composer',
+          '[data-testid="message-input"]',
+        ];
+
+        let dropZone: ElementHandle | null = null;
+        for (const selector of dropZoneSelectors) {
+          try {
+            dropZone = await this.page.$(selector);
+            if (dropZone && (await dropZone.isVisible())) {
+              logger.info(`Found drop zone: ${selector}`);
+              break;
+            }
+          } catch (e) {
+            continue;
+          }
+        }
+
+        if (dropZone) {
+          // Read file and create DataTransfer for drag-and-drop
+          for (const filePath of filePaths) {
+            const fileName = path.basename(filePath);
+            const fileBuffer = fs.readFileSync(filePath);
+            
+            // Dispatch drop event with file (runs in browser context)
+            // eslint-disable-next-line @typescript-eslint/no-implied-eval
+            await this.page.evaluate(new Function('args', `
+              const { fileName, fileData, mimeType } = args;
+              const uint8Array = new Uint8Array(
+                atob(fileData)
+                  .split('')
+                  .map(c => c.charCodeAt(0))
+              );
+              const file = new File([uint8Array], fileName, { type: mimeType });
+              const dataTransfer = new DataTransfer();
+              dataTransfer.items.add(file);
+
+              const dropZone = document.querySelector('[aria-label="message input"]') ||
+                               document.querySelector('div[contenteditable="true"]');
+              if (dropZone) {
+                const dropEvent = new DragEvent('drop', {
+                  bubbles: true,
+                  cancelable: true,
+                  dataTransfer,
+                });
+                dropZone.dispatchEvent(dropEvent);
+              }
+            `) as any, {
+              fileName,
+              fileData: fileBuffer.toString('base64'),
+              mimeType: this.getMimeType(filePath),
+            });
+            logger.info(`Dropped file via drag-and-drop: ${fileName}`);
+          }
+          await sleep(2000);
+        } else {
+          logger.error('❌ Could not find attachment method (button, input, or drop zone)');
+          throw new Error('No attachment method available');
+        }
+      }
+
+      logger.info(`✅ Media attachment complete`);
+    } catch (error: any) {
+      logger.error('Failed to attach media files:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Get MIME type from file extension
+   */
+  private getMimeType(filePath: string): string {
+    const ext = path.extname(filePath).toLowerCase();
+    const mimeTypes: Record<string, string> = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+      '.pdf': 'application/pdf',
+      '.mp4': 'video/mp4',
+      '.mov': 'video/quicktime',
+    };
+    return mimeTypes[ext] || 'application/octet-stream';
   }
 
   /**

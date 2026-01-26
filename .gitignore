@@ -36,3 +36,10 @@ screenshots/
 
 # Docker volumes
 data/
+
+# Test files
+debug-log.txt
+monkey.png
+test-image.png
+*.png
+!src/**/*.png

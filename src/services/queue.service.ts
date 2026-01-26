@@ -11,6 +11,8 @@ import {
   hashText,
   isRetryableError,
   sanitizePhone,
+  saveMediaFiles,
+  cleanupMediaFiles,
 } from '../utils/helpers';
 
 /**
@@ -51,27 +53,42 @@ export class QueueService {
    * Process single message with retry logic
    */
   private async processMessage(payload: WebhookPayload): Promise<void> {
-    const { phone, text, external_id } = payload;
+    const { phone, text, external_id, media } = payload;
     let attempt = 0;
     let lastError: any = null;
+    let mediaFilePaths: string[] = [];
 
-    logger.info(`Processing message for ${sanitizePhone(phone)}`);
+    logger.info(`Processing message for ${sanitizePhone(phone)}${media ? ` with ${media.length} media file(s)` : ''}`);
 
-    while (attempt < config.queue.maxRetries) {
-      attempt++;
-
+    // Save media files to disk if provided
+    if (media && media.length > 0) {
       try {
-        // Log attempt start
-        await this.logAttempt(
-          phone,
-          text,
-          external_id,
-          attempt,
-          MessageStatus.SENDING
-        );
+        const uniqueId = `${Date.now()}_${phone.replace(/[^0-9]/g, '')}`;
+        mediaFilePaths = saveMediaFiles(media, uniqueId);
+        logger.info(`Saved ${mediaFilePaths.length} media file(s) to temp directory`);
+      } catch (error: any) {
+        logger.error('Failed to save media files:', error.message);
+        // Continue without media if save fails
+        mediaFilePaths = [];
+      }
+    }
 
-        // Send message
-        const result = await this.openPhoneService.sendMessage(phone, text);
+    try {
+      while (attempt < config.queue.maxRetries) {
+        attempt++;
+
+        try {
+          // Log attempt start
+          await this.logAttempt(
+            phone,
+            text,
+            external_id,
+            attempt,
+            MessageStatus.SENDING
+          );
+
+          // Send message (with optional media)
+          const result = await this.openPhoneService.sendMessage(phone, text, mediaFilePaths.length > 0 ? mediaFilePaths : undefined);
 
         if (result.success) {
           // Log success
@@ -260,15 +277,22 @@ export class QueueService {
         });
 
         // Don't retry on unexpected errors
-        return;
+          return;
+        }
       }
-    }
 
-    // If we get here, all retries failed
-    if (lastError) {
-      logger.error(
-        `All ${config.queue.maxRetries} attempts failed for ${sanitizePhone(phone)}`
-      );
+      // If we get here, all retries failed
+      if (lastError) {
+        logger.error(
+          `All ${config.queue.maxRetries} attempts failed for ${sanitizePhone(phone)}`
+        );
+      }
+    } finally {
+      // Cleanup temporary media files
+      if (mediaFilePaths.length > 0) {
+        cleanupMediaFiles(mediaFilePaths);
+        logger.info(`Cleaned up ${mediaFilePaths.length} temporary media file(s)`);
+      }
     }
   }
 

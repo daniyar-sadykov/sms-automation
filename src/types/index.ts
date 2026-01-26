@@ -10,12 +10,26 @@ export enum MessageStatus {
 }
 
 /**
+ * Media file attachment (base64 encoded)
+ */
+export interface MediaFile {
+  /** Original filename with extension (e.g., "photo.jpg") */
+  filename: string;
+  /** MIME type (e.g., "image/jpeg", "image/png", "application/pdf") */
+  mimeType: string;
+  /** Base64 encoded file data */
+  data: string;
+}
+
+/**
  * Webhook payload from n8n
  */
 export interface WebhookPayload {
   phone: string;
   text: string;
   external_id?: string;
+  /** Optional media attachments (for MMS) */
+  media?: MediaFile[];
 }
 
 /**

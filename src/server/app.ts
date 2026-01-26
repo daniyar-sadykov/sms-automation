@@ -2,7 +2,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import { QueueService } from '../services/queue.service';
 import { WebhookPayload } from '../types';
 import { logger } from '../utils/logger';
-import { sanitizePhone, createMessagePreview } from '../utils/helpers';
+import { sanitizePhone, createMessagePreview, validateMediaFiles } from '../utils/helpers';
 
 /**
  * Create Express app with webhook endpoints
@@ -11,8 +11,9 @@ export function createApp(queueService: QueueService): express.Application {
   const app = express();
 
   // Middleware
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
+  // Increase JSON body limit for base64 media files (default is 100kb)
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
   // Request logging middleware
   app.use((req, res, next) => {
@@ -66,10 +67,35 @@ export function createApp(queueService: QueueService): express.Application {
         return res.status(400).json(errorResponse);
       }
 
+      // Validate media files if provided (including total size check)
+      if (payload.media && payload.media.length > 0) {
+        const mediaValidation = validateMediaFiles(payload.media);
+        if (!mediaValidation.valid) {
+          const errorResponse = {
+            success: false,
+            message: 'Media validation failed',
+            timestamp: new Date().toISOString(),
+            phone: sanitizePhone(payload.phone),
+            message_preview: createMessagePreview(payload.text),
+            error: mediaValidation.error,
+            error_code: 'INVALID_MEDIA',
+          };
+          return res.status(400).json(errorResponse);
+        }
+        
+        const totalSizeKB = Math.round((mediaValidation.totalSizeBytes || 0) / 1024);
+        logger.info(`Message includes ${payload.media.length} media attachment(s), total size: ${totalSizeKB}KB`);
+        
+        // Log warning if size exceeds recommended
+        if (mediaValidation.warning) {
+          logger.warn(`⚠️ ${mediaValidation.warning}`);
+        }
+      }
+
       logger.info(
         `Received message request for ${sanitizePhone(payload.phone)} ${
           payload.external_id ? `(ID: ${payload.external_id})` : ''
-        }`
+        }${payload.media ? ` with ${payload.media.length} media file(s)` : ''}`
       );
 
       // Add to queue
