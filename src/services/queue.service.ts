@@ -53,7 +53,7 @@ export class QueueService {
    * Process single message with retry logic
    */
   private async processMessage(payload: WebhookPayload): Promise<void> {
-    const { phone, text, external_id, media } = payload;
+    const { phone, text, external_id, media, source } = payload;
     let attempt = 0;
     let lastError: any = null;
     let mediaFilePaths: string[] = [];
@@ -127,6 +127,7 @@ export class QueueService {
             attempt,
             duration_ms: result.durationMs,
             screenshot_urls: screenshotUrls, // Send Supabase Storage URLs
+            source, // Pass through the original source
           });
 
           // Random delay before next message
@@ -186,6 +187,7 @@ export class QueueService {
               },
               screenshot_url: result.screenshotPath,
               screenshot_urls: screenshotUrls,
+              source, // Pass through the original source
             });
 
             // Wait before retry (exponential backoff)
@@ -236,6 +238,7 @@ export class QueueService {
               },
               screenshot_url: result.screenshotPath,
               screenshot_urls: screenshotUrls,
+              source, // Pass through the original source
             });
 
             // Still wait before next message
@@ -274,6 +277,7 @@ export class QueueService {
             code: 'UNEXPECTED_ERROR',
             message: error.message,
           },
+          source, // Pass through the original source
         });
 
         // Don't retry on unexpected errors

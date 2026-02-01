@@ -30,6 +30,8 @@ export interface WebhookPayload {
   external_id?: string;
   /** Optional media attachments (for MMS) */
   media?: MediaFile[];
+  /** Source of the request (e.g., "n8n", "api", "crm") - used to identify origin in callbacks */
+  source?: string;
 }
 
 /**
@@ -87,4 +89,6 @@ export interface N8nCallbackPayload {
   };
   screenshot_url?: string;
   screenshot_urls?: string[]; // Array of public URLs from Supabase Storage
+  /** Source of the original request - passed through for routing on n8n side */
+  source?: string;
 }
